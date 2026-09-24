@@ -4,14 +4,14 @@ import pandas as pd
 import sqlite3
 from clean import connect_server
 from dotenv import load_dotenv
-from sanity_check import missing_rows
+from sanity_check import wells_missing
 import time
 
 BASE = "https://api.emnrd.nm.gov/wda"
 LOGIN_URL = f"{BASE}/v2/Authorization/Token/LoginCredentials"
 load_dotenv()
 conn = connect_server()
-data_find = ["formation-tops", "production-injection", "water"]
+data_find = ["formation-tops", "production-injection", "linq", "perforations"]
 
 def login():
     resp = requests.post(LOGIN_URL, json={
@@ -37,38 +37,47 @@ def get_api():
     """
     return pd.read_sql(query, conn)
 
-def find_missing_water():
-    return missing_rows(conn)
+def find_missing_water(session):
+    water_df = wells_missing(conn)
+    print(water_df)
 
-def parameters_link(category, by_well=True):
+def parameters_link(category):
     match category:
         case "formation-tops":
             params = {"IncludeFormationTops": "true", "IncludeHistory": "true", "IncludePointOfDispositions": "true"}
             link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/well", "formation-tops"]
-            return params, link
         case "production-injection":
             params = None
             link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/well", "production-injection"]
-            return params, link
-        case "water":
-            return
+        case "water-uses":
+            params = {"api_number": None}
+            link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/water_uses"]
+        case "perforations":
+            params = {"IncludeDetailedData": "true", "WellApi": None}
+            link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/wells"]
         case _:
             raise ValueError("Invalid category passed in")
+    return params, link
 
 
-def emnrd_query(link, category, per_well=True):
-    sessions = session_auth(access_token, refresh_token)
+def emnrd_per_well(session, category, per_well=True):
     parameters, url = parameters_link(category)
     if per_well:
         frames = []
         for well in get_api().itertuples():
             api = str(well.APINumber)[:-4]
-            p1,p2 = url
-            link = f"{p1}/{api}/{p2}"
-            if parameters:
-                resp = sessions.get(link, params=parameters)
+            # handle perforations
+            if len(url) < 2:
+                link = url[0]
+                parameters["WellApi"] = api
             else:
-                resp = sessions.get(link)
+                p1,p2 = url
+                link = f"{p1}/{api}/{p2}"
+
+            if parameters:
+                resp = session.get(link, params=parameters)
+            else:
+                resp = session.get(link)
             time.sleep(0.2)
             resp.raise_for_status()
             body = resp.json()
@@ -77,19 +86,16 @@ def emnrd_query(link, category, per_well=True):
     else:
         return pd.DataFrame()
 
-def find_missing_tbwv(connection):
-    sessions = session_auth(access_token, refresh_token)
-    parameters = {}
-    frames = []
 
 
 if __name__ == "__main__":
     access_token, refresh_token = login()
+    session_authent = session_auth(access_token, refresh_token)
     print("Login OK — access token prefix:", access_token[:20])
     print("Refresh token present:", bool(refresh_token))
     for val in data_find:
         cat = parameters_link(val)
-        df = emnrd_query(cat)
+        df = emnrd_per_well(session_authent, cat)
         print(df.shape)
         df.to_csv()
 
