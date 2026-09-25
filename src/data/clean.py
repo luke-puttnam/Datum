@@ -18,6 +18,9 @@ def gather(file_name, disc=False):
         mask &= df["TotalBaseWaterVolume"].notna()
     return df[mask]
 
+def check_refrack():
+    pass
+
 def duplicate_check(df):
     df = df.drop_duplicates(subset=['DisclosureId'])
     return df

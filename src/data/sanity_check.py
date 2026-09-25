@@ -3,7 +3,7 @@ from clean import connect_server
 
 def general(connection):
     query = """
-            SELECT COUNT(*) AS disclosures
+            SELECT COUNT(*)
             FROM disclosures
             WHERE StateName = "New Mexico"; \
             """
@@ -70,8 +70,29 @@ def merge_dist(connection):
     return pd.read_sql(query, connection)
 
 
+def missing_water_2020(connection):
+    query = """
+    SELECT APINumber, DisclosureID, TotalBaseWaterVolume,
+        CAST(substr(JobStartDate, instr(JobStartDate, ' ') - 4, 4) AS INTEGER) AS year
+    FROM disclosures
+    WHERE year > 2020
+        AND (TotalBaseWaterVolume IS NULL OR TotalBaseWaterVolume = 0)
+    ORDER BY year;
+    """
+    return pd.read_sql(query, connection)
+
+def check_2(connection):
+    query = """
+    SELECT JobStartDate, strftime('%Y', JobStartDate) AS year
+    FROM disclosures
+    LIMIT 5
+    """
+    return pd.read_sql(query, connection)
+
 if __name__ == "__main__":
     conn = connect_server()
+    print(general(conn))
+    print(check_2(conn))
     # print(general(conn))
     # df = find_missing_tbwv(conn)
     # print(df)
