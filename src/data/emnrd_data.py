@@ -11,12 +11,18 @@ from requests.exceptions import ContentDecodingError
 from clean import connect_server
 from dotenv import load_dotenv
 from sanity_check import missing_water_2020
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE = "https://api.emnrd.nm.gov/wda"
 LOGIN_URL = f"{BASE}/v2/Authorization/Token/LoginCredentials"
 load_dotenv()
 conn = connect_server()
 data_find = ["formation-tops", "production-injection", "linq", "perforations"]
+
+retry = Retry(total=5, backoff_factor=1,
+              status_forcelist=[429, 500, 502, 503, 504],
+              allowed_methods=["GET"])
 
 def login():
     resp = requests.post(LOGIN_URL, json={
@@ -58,7 +64,8 @@ def get_json(session, link, params, retries=3):
             lambda b: zlib.decompress(b, -zlib.MAX_WBITS)):
             try:
                 return json.loads(decode(raw))
-            except ContentDecodingError:
+            except (brotli.error, OSError, zlib.error,
+                    json.JSONDecodeError, UnicodeDecodeError):
                 continue
         print(f"couldn't decode response for {params}, retrying ({attempt + 1}/{retries}")
         time.sleep(2)
@@ -114,43 +121,71 @@ def parameters_link(category):
     return params, link
 
 
-def emnrd_per_well(session, category, per_well=True):
+def emnrd_per_well(session, category, table = None, batch_size=300):
+    table = table or f'emnrd_{category}'
     parameters, url = parameters_link(category)
-    if per_well:
-        frames = []
-        for well in get_api().itertuples():
-            api = str(well.APINumber)[:-4]
-            # handle perforations
-            if len(url) < 2:
-                link = url[0]
-                parameters["WellApi"] = api
-            else:
-                p1,p2 = url
-                link = f"{p1}/{api}/{p2}"
+    try:
+        done = set(pd.read_sql(f"SELECT DISTINCT _api FROM {table}", conn)["_api"])
+    except Exception:
+        done = set()
+    frames = []
+    failed = []
+    for well in get_api().itertuples():
+        api = str(well.APINumber)[:-4]
+        if api in done:
+            continue
 
-            if parameters:
-                resp = session.get(link, params=parameters)
-            else:
-                resp = session.get(link)
-            time.sleep(0.2)
-            resp.raise_for_status()
-            body = resp.json()
-            frames.append(pd.json_normalize(body))
-        return pd.concat(frames, ignore_index=True)
-    else:
-        return pd.DataFrame()
+        params = dict(parameters) if parameters else {}
+        if len(url) < 2:
+            link = url[0]
+            params["WellApi"] = api
+        else:
+            p1,p2 = url
+            link = f"{p1}/{api}/{p2}"
+        try:
+            print(f'Sending get request for {category}.')
+            body = get_json(session, link, params or None)
+            df = pd.json_normalize(body)
+            df["_api"] = api
+            frames.append(df)
+        except Exception as e:
+            print(f'failed for {category}')
+            failed.append((api, str(e)))
+        time.sleep(0.2)
+
+        if len(frames) >= batch_size:
+            pd.concat(frames, ignore_index=True).astype(str).to_sql(
+                table, conn, if_exists="append", index=False
+            )
+            frames = []
+    if frames:
+        pd.concat(frames, ignore_index=True).astype(str).to_sql(
+            table, conn, if_exists="append", index=False)
+    if failed:
+        pd.DataFrame(failed, columns=["api", "error"]).to_csv(
+            f'failed_{category}.csv', index=False
+        )
+        print(f'{len(failed)} wells failed; check failed_{category}.csv')
 
 
 if __name__ == "__main__":
     access_token, refresh_token = login()
     session_authentication = session_auth(access_token, refresh_token)
-    water_df = missing_water_2020(conn)
-    water_df["wellApi"] = water_df["APINumber"].apply(to_nm_api)
+    session_authentication.mount("https://", HTTPAdapter(max_retries=retry))
+    has_run = False
+    if has_run:
+        water_df = missing_water_2020(conn)
+        water_df["wellApi"] = water_df["APINumber"].apply(to_nm_api)
+        nm_df = fetch_all_water_uses(session_authentication)
+        merged = water_df.merge(nm_df, on="wellApi", how="left")
+        merged.to_csv("check.csv", index=False)
+        print(f'{merged["totalWater"].notna().sum()} of {len(merged)} wells matched')
 
-    nm_df = fetch_all_water_uses(session_authentication)
-    merged = water_df.merge(nm_df, on="wellApi", how="left")
-    merged.to_csv("check.csv", index=False)
-    print(f'{merged["totalWater"].notna().sum()} of {len(merged)} wells matched')
+    print("Starting!")
+    for cat in data_find:
+        emnrd_per_well(session_authentication, cat, True)
+    print("Done")
+
 
 
     # print("Login OK — access token prefix:", access_token[:20])
