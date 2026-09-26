@@ -116,6 +116,11 @@ def parameters_link(category):
         case "perforations":
             params = {"IncludeDetailedData": "true", "WellApi": None}
             link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/wells"]
+        case "linq":
+            params = {""}
+            link = [""]
+        case "perforations":
+                params = {""}
         case _:
             raise ValueError("Invalid category passed in")
     return params, link
@@ -130,7 +135,9 @@ def emnrd_per_well(session, category, table = None, batch_size=300):
         done = set()
     frames = []
     failed = []
-    for well in get_api().itertuples():
+    for i, well in enumerate(get_api().itertuples()):
+        if i % 500 == 0:
+            print(f"{category}: {i} wells processed, {len(failed)} failed")
         api = str(well.APINumber)[:-4]
         if api in done:
             continue
@@ -183,7 +190,7 @@ if __name__ == "__main__":
 
     print("Starting!")
     for cat in data_find:
-        emnrd_per_well(session_authentication, cat, True)
+        emnrd_per_well(session_authentication, cat)
     print("Done")
 
 
