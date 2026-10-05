@@ -33,17 +33,6 @@ def check_database(connection, table):
     print(pd.read_sql(f"SELECT COUNT(*) FROM {table}", connection))
     print(pd.read_sql(f"SELECT * FROM {table} LIMIT 5", connection))
 
-# use for future applications (map all information about a certain well to its disclosure information).
-# def join(connection):
-#     q = """
-#         SELECT d.APINumber, d.TotalBaseWaterVolume, d.CountyName,
-#                i.IngredientCommonName, i.MassIngredient
-#         FROM disclosures d
-#                  JOIN frac_nm i ON d.DisclosureId = i.DisclosureId
-#         WHERE i.IngredientCommonName = 'Hydrochloric acid'
-#         """
-#     return pd.read_sql(q, connection)
-
 if __name__ == "__main__":
     conn = connect_server()
     for f in FRAC.iterdir():

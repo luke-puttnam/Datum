@@ -6,21 +6,18 @@ import gzip
 import json
 import zlib
 import brotli
-import sqlite3
-from pathlib import Path
-from requests.exceptions import ContentDecodingError
+import urllib3.exceptions
 
 from clean import connect_server
+from pathlib import Path
 from dotenv import load_dotenv
-from sanity_check import missing_water_2020
-from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE = "https://api.emnrd.nm.gov/wda"
 LOGIN_URL = f"{BASE}/v2/Authorization/Token/LoginCredentials"
 load_dotenv()
 conn = connect_server()
-data_find = ["formation-tops", "production-injection", "linq", "perforations"]
+data_find = ["formation-tops", "production-injection", "perforations"]
 
 retry = Retry(total=5, backoff_factor=1,
               status_forcelist=[429, 500, 502, 503, 504],
@@ -66,6 +63,11 @@ def get_json(session, link, params, retries=3):
             lambda b: zlib.decompress(b, -zlib.MAX_WBITS)):
             try:
                 return json.loads(decode(raw))
+            except (requests.RequestException, urllib3.exceptions.HTTPError) as e:
+                wait = 5 * 2 ** attempt
+                print(f'request failed ({e}), retrying in {wait}s ({attempt + 1}/{retries})')
+                time.sleep(wait)
+                continue
             except (brotli.error, OSError, zlib.error,
                     json.JSONDecodeError, UnicodeDecodeError):
                 continue
@@ -103,9 +105,9 @@ def fetch_all_water_uses(session):
 def to_nm_api(api):
     s = str(api).split(".")[0]
     digits = "".join(c for c in s if c.isdigit())
-    if len(digits) in (12, 14):      # FracFocus-style with sidetrack/event
+    if len(digits) in (12, 14):
         digits = digits[:10]
-    digits = digits.zfill(10)        # pad only up to 10, not 14
+    digits = digits.zfill(10)
     return f"{digits[:2]}-{digits[2:5]}-{digits[5:]}"
 
 def parameters_link(category):
@@ -130,20 +132,29 @@ def parameters_link(category):
             raise ValueError("Invalid category passed in")
     return params, link
 
+def get_page(session, link, params, page, cache_dir):
+    cache = cache_dir / f'page{page:04d}.json'
+    if cache.exists():
+        return json.loads(cache.read_text(encoding="utf-8"))
+    data = get_json(session, link, dict(params, PageIndex=page))
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    time.sleep(0.8)
+    return data
 
-def linq_by_county(session, out_dir = "linq_counties.csv", db_path = "datum.db"):
-    base_params, link = parameters_link(session)
+def linq_by_county(session, out_dir = "linq_counties.csv"):
+    base_params, link = parameters_link("linq")
+    PAGE_SIZE = 250
     if isinstance(link, list):
         link = link[0]
 
     out = Path(out_dir)
     out.mkdir(exist_ok=True)
-    counties = [f"30-{n:03d}" for n in range(1, 62, 2)]   # all 33 NM counties
+    counties = [f"30-{n:03d}" for n in range(1, 62, 2)] + ["30-006", "30-028"] # all 33 NM counties
     failed_pages = []
 
     for county in counties:
         path = out / f"{county}.csv"
-        if path.exists():
+        if path.exists() and path.stat().st_size > 0:
             print(f"{county} already done, skipping")
             continue
 
@@ -152,24 +163,33 @@ def linq_by_county(session, out_dir = "linq_counties.csv", db_path = "datum.db")
             "LINQFilterExpression": f'WellApi.StartsWith("{county}")',
             "IncludeDetailedData": True,
             "ExcludePluggedWells": False,
-            "PageSize": 500,
+            "PageSize": PAGE_SIZE,
         })
 
-        rows, page, total_pages = [], 1, 1
+        cache_dir = out / f"{county}_pages_{PAGE_SIZE}"
+        cache_dir.mkdir(exist_ok=True)
+
+        rows = []
+        page, total_pages = 1, 1
+        complete = True
+
         while page <= total_pages:
-            params["PageIndex"] = page
             try:
-                r = session.get(link, params=params, timeout=120)
-                r.raise_for_status()
-                data = r.json()
-                total_pages = data["totalPages"]
-                rows.extend(data["items"])
-                print(f"{county} page {page}/{total_pages}")
+                print(f'County: {county}; trying to get page, {page}/{total_pages}', flush=True)
+                data = get_page(session, link, params, page, cache_dir)
             except Exception as e:
                 print(f"{county} page {page} failed: {e}")
                 failed_pages.append((county, page))
+                complete = False
+                break
+            total_pages = data["totalPages"]
+            rows.extend(data["items"])
+            print(f'{county} page {page}/{total_pages}', flush=True)
             page += 1
-            time.sleep(0.5)
+
+        if not complete:
+            print(f'{county} incomplete, not saved. Rerun to retry')
+            continue
 
         if rows:
             df = pd.json_normalize(rows)
@@ -180,81 +200,24 @@ def linq_by_county(session, out_dir = "linq_counties.csv", db_path = "datum.db")
         else:
             path.touch()
 
-    parts = [pd.read_csv(p) for p in sorted(out.glob("*.csv")) if p.stat().st_size > 0]
+    parts = [pd.read_csv(p, low_memory=False) for p in sorted(out.glob("*.csv")) if p.stat().st_size > 0]
     full = pd.concat(parts, ignore_index=True)
-    with sqlite3.connect(db_path) as conn:
-        full.to_sql("emnrd_linq", conn, if_exists="replace", index=False)
+    try:
+        old_count = conn.execute("""
+        SELECT COUNT(*) FROM emnrd_linq
+        """).fetchone()[0]
+    except:
+        old_count = 0
+
+    if len(full) < old_count:
+        raise RuntimeError(
+            f'new table has {len(full)} wells but the existing one has {old_count}; not replacing'
+        )
+    full.to_sql("emnrd_linq", conn, if_exists="replace", index=False)
 
     pd.DataFrame(failed_pages, columns=["county", "page"]).to_csv("linq_failed.csv", index=False)
     print(f"{len(full)} wells saved, {len(failed_pages)} pages failed")
     return full, failed_pages
-
-
-# def linq(session):
-#     if session is None:
-#         raise ValueError("Missing session")
-#
-#     BATCH_SIZE = 50
-#     PAGE_SIZE = 500
-#
-#     base_params, url = parameters_link("linq")
-#     if isinstance(url, list):
-#         url = url[0]
-#
-#     raw = get_api()
-#     apis = sorted(set(raw["APINumber"].apply(to_nm_api)))
-#
-#     frames = []
-#     failed = []
-#
-#     for i in range(0, len(apis), BATCH_SIZE):
-#         #batch = apis[i:i + BATCH_SIZE]
-#         batch = apis[:100]
-#         params = dict(base_params)
-#         params.update({
-#             "LINQFilterExpression": " or ".join(f'WellApi = "{a}"' for a in batch),
-#             "IncludeDetailedData": True,
-#             "ExcludePluggedWells": False,
-#             "PageSize": PAGE_SIZE,
-#         })
-#
-#         page = 1
-#         try:
-#             while True:
-#                 params["PageIndex"] = page
-#                 r = session.get(url, params=params, timeout=60)
-#                 r.raise_for_status()
-#                 records = r.json()
-#                 if records:
-#                     frames.append(pd.json_normalize(records))
-#                 if len(records) < PAGE_SIZE:
-#                     break
-#                 page += 1
-#         except Exception as e:
-#             print(f"Batch {i // BATCH_SIZE} failed {e}")
-#             failed.extend(batch)
-#         time.sleep(0.5)
-#
-#     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-#     failed_df = pd.DataFrame({"api": failed})
-#     failed_df.to_csv("linq_failed.csv")
-#
-#     if df.empty:
-#         print(f'No data returned. {len(failed)} APIs failed.')
-#         return df, failed_df
-#
-#     list_cols = [
-#         c for c in df.columns
-#         if df[c].apply(lambda x: isinstance(x, (list, dict))).any()
-#     ]
-#     print("Nested columns", list_cols)
-#
-#     for c in list_cols:
-#         df[c] = df[c].apply(lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x)
-#
-#     df.to_csv("linq_success.csv", index=False)
-#     df.to_sql("emnrd_linq", conn, if_exists="replace", index=False)
-#     return df, failed
 
 def emnrd_per_well(session, category, table = None, batch_size=300):
     table = table or f'emnrd_{category}'
@@ -280,6 +243,7 @@ def emnrd_per_well(session, category, table = None, batch_size=300):
         try:
             print(f'Sending get request for {category}.')
             body = get_json(session, link, params or None)
+            print(f"sending request for this api: {api}")
             df = pd.json_normalize(body)
             df["_api"] = api
             frames.append(df)
@@ -313,37 +277,10 @@ def try_filter(session, link, base_params, expr):
 def main():
     access_token, refresh_token = login()
     session_authentication = session_auth(access_token, refresh_token)
-    session_authentication.mount("https://", HTTPAdapter(max_retries=retry))
-    # has_run = False
-    # if has_run:
-    #     water_df = missing_water_2020(conn)
-    #     water_df["wellApi"] = water_df["APINumber"].apply(to_nm_api)
-    #     nm_df = fetch_all_water_uses(session_authentication)
-    #     merged = water_df.merge(nm_df, on="wellApi", how="left")
-    #     merged.to_csv("check.csv", index=False)
-    #     print(f'{merged["totalWater"].notna().sum()} of {len(merged)} wells matched')
-    #
-    # print("Starting!")
-    # for cat in data_find:
-    #     emnrd_per_well(session_authentication, cat, True)
-    #     if cat == "linq":
-    #         linq(session_authentication)
-    # print("Done")
-
     full, failed_pages = linq_by_county(session_authentication)
-
+    for cat in data_find:
+        emnrd_per_well(session_authentication, cat)
     conn.close()
-
 
 if __name__ == "__main__":
     main()
-
-
-    # print("Login OK — access token prefix:", access_token[:20])
-    # print("Refresh token present:", bool(refresh_token))
-    # for val in data_find:
-    #     cat = parameters_link(val)
-    #     df = emnrd_per_well(session_authent, cat)
-    #     print(df.shape)
-    #     df.to_csv()
-
