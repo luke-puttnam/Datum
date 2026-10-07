@@ -1,0 +1,55 @@
+"""Shared paths, constants and settings for Datum. Lives in src/data."""
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# ---------- Paths ----------
+DATA_DIR = Path(__file__).resolve().parent          # src/data
+PROJECT_ROOT = DATA_DIR.parents[1]                  # Datum/
+DB_PATH = DATA_DIR / "datum.db"
+LINQ_DIR = DATA_DIR / "linq_counties.csv"           # folder of per-county LINQ pulls
+ENV_PATH = PROJECT_ROOT / ".env"
+
+# ---------- Constants ----------
+NM_COUNTIES = {
+    "001": "Bernalillo", "003": "Catron", "005": "Chaves", "006": "Cibola",
+    "007": "Colfax", "009": "Curry", "011": "De Baca", "013": "Dona Ana",
+    "015": "Eddy", "017": "Grant", "019": "Guadalupe", "021": "Harding",
+    "023": "Hidalgo", "025": "Lea", "027": "Lincoln", "028": "Los Alamos",
+    "029": "Luna", "031": "McKinley", "033": "Mora", "035": "Otero",
+    "037": "Quay", "039": "Rio Arriba", "041": "Roosevelt", "043": "Sandoval",
+    "045": "San Juan", "047": "San Miguel", "049": "Santa Fe", "051": "Sierra",
+    "053": "Socorro", "055": "Taos", "057": "Torrance", "059": "Union",
+    "061": "Valencia",
+}
+
+# The counties the model covers.
+TARGET_COUNTIES = {"015": "EDDY", "025": "LEA"}
+
+
+# ---------- Settings ----------
+@dataclass(frozen=True)
+class APIConfig:
+    base_url: str = "https://api.emnrd.nm.gov/wda/v2/ocd/permitting"
+    page_size: int = 250
+    timeout: int = 30
+    sleep_between: float = 0.2
+    username: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+
+    @classmethod
+    def load(cls):
+        """Credentials come from the environment (.env), never from this file."""
+        return cls(
+            username=os.environ.get("EMNRD_USER", ""),
+            password=os.environ.get("EMNRD_PASS", ""),
+        )
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    target: str = "TotalBaseWaterVolume"
+    log_target: bool = True
+    val_share: float = 0.15
+    test_share: float = 0.15
+    random_seed: int = 42

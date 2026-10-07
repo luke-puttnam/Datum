@@ -43,8 +43,8 @@ def session_auth(acc_token, ref_token, use_access = True):
 
 def get_api():
     query = """
-    SELECT DISTINCT(APINumber) FROM disclosures;
-    """
+            SELECT DISTINCT(APINumber) FROM disclosures; \
+            """
     return pd.read_sql(query, conn)
 
 def get_json(session, link, params, retries=3):
@@ -60,7 +60,7 @@ def get_json(session, link, params, retries=3):
         raw = resp.raw.read(decode_content=False)
 
         for decode in (lambda b: b, brotli.decompress, gzip.decompress,
-            lambda b: zlib.decompress(b, -zlib.MAX_WBITS)):
+                       lambda b: zlib.decompress(b, -zlib.MAX_WBITS)):
             try:
                 return json.loads(decode(raw))
             except (requests.RequestException, urllib3.exceptions.HTTPError) as e:
@@ -103,6 +103,8 @@ def fetch_all_water_uses(session):
     return nm_df
 
 def to_nm_api(api):
+    if pd.isna(api):
+        return None
     s = str(api).split(".")[0]
     digits = "".join(c for c in s if c.isdigit())
     if len(digits) in (12, 14):
@@ -122,7 +124,8 @@ def parameters_link(category):
             params = {"api_number": None}
             link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/water_uses"]
         case "perforations":
-            params = {"IncludeDetailedData": "true", "WellApi": None}
+            params = {"IncludeCompletions": True, "IncludeFormationTops": True,
+                      "IncludeCasings": True, "IncludeWellProductionInjection": True}
             link = ["https://api.emnrd.nm.gov/wda/v2/ocd/permitting/wells"]
         case "linq":
             params = {"IncludeDetailedData": "true", "ExcludePluggedWells": "false",
@@ -204,8 +207,8 @@ def linq_by_county(session, out_dir = "linq_counties.csv"):
     full = pd.concat(parts, ignore_index=True)
     try:
         old_count = conn.execute("""
-        SELECT COUNT(*) FROM emnrd_linq
-        """).fetchone()[0]
+                                 SELECT COUNT(*) FROM emnrd_linq
+                                 """).fetchone()[0]
     except:
         old_count = 0
 
@@ -226,40 +229,49 @@ def emnrd_per_well(session, category, table = None, batch_size=300):
         done = set(pd.read_sql(f"SELECT DISTINCT _api FROM {table}", conn)["_api"])
     except Exception:
         done = set()
+    print(f'{len(done)} wells already in {table}', flush=True)
     frames = []
     failed = []
+    fails_ina_row = 0
     for well in get_api().itertuples():
         api = str(well.APINumber)[:-4]
         if api in done:
             continue
-
         params = dict(parameters) if parameters else {}
         if len(url) < 2:
-            link = url[0]
-            params["WellApi"] = api
+            if category.lower() == "perforations":
+                link = f'{url[0]}/{api}'
+            else:
+                link = url[0]
+                params["WellApi"] = api
         else:
             p1,p2 = url
             link = f"{p1}/{api}/{p2}"
         try:
-            print(f'Sending get request for {category}.')
+            print(f'Sending get request for {category}. API: {api}')
             body = get_json(session, link, params or None)
-            print(f"sending request for this api: {api}")
             df = pd.json_normalize(body)
+            if category == "perforations":
+                for c in df.columns:
+                    if df[c].apply(lambda x: isinstance(x, (list, dict))).any():
+                        df[c] = df[c].apply(lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x)
             df["_api"] = api
             frames.append(df)
+            fails_ina_row = 0
         except Exception as e:
-            print(f'failed for {category}')
+            print(f'failed for {category}, api {api}: {e}', flush=True)
             failed.append((api, str(e)))
+            fails_ina_row += 1
+            if fails_ina_row >= 20:
+                print(f'20 failures in a row, stopping')
+                break
         time.sleep(0.2)
 
         if len(frames) >= batch_size:
-            pd.concat(frames, ignore_index=True).astype(str).to_sql(
-                table, conn, if_exists="append", index=False
-            )
+            append_frames(frames, table, conn)
             frames = []
     if frames:
-        pd.concat(frames, ignore_index=True).astype(str).to_sql(
-            table, conn, if_exists="append", index=False)
+        append_frames(frames, table, conn)
     if failed:
         pd.DataFrame(failed, columns=["api", "error"]).to_csv(
             f'failed_{category}.csv', index=False
@@ -273,13 +285,25 @@ def try_filter(session, link, base_params, expr):
     r = session.get(link, params=p, timeout=60)
     print(r.status_code, len(r.url), r.text[:200])
 
+def append_frames(frames, table, conn):
+    df = pd.concat(frames, ignore_index=True).astype(str)
+    existing = {r[1].lower() for r in conn.execute(f'PRAGMA table_info("{table}")')}
+    if existing:   # table already exists: add any columns it's missing
+        for col in df.columns:
+            if col.lower() not in existing:
+                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{col}" TEXT')
+    df.to_sql(table, conn, if_exists="append", index=False)
 
 def main():
     access_token, refresh_token = login()
     session_authentication = session_auth(access_token, refresh_token)
     full, failed_pages = linq_by_county(session_authentication)
+    ALREADY_DONE = ["formation-tops", "production-injection"]
     for cat in data_find:
+        if cat in set(ALREADY_DONE):
+            continue
         emnrd_per_well(session_authentication, cat)
+    nm_df = fetch_all_water_uses(session_authentication)
     conn.close()
 
 if __name__ == "__main__":
