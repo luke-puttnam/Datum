@@ -8,7 +8,7 @@ import zlib
 import brotli
 import urllib3.exceptions
 
-from clean import connect_server
+from data.clean import connect_server
 from pathlib import Path
 from dotenv import load_dotenv
 from urllib3.util.retry import Retry

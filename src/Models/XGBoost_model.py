@@ -14,8 +14,8 @@ from xgboost import XGBRegressor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))   # src/data
 
-from config import DB_PATH
-from consolidate import CATEGORICAL, FEATURES, OUT_TABLE, TARGET
+from data.config import DB_PATH
+from data.consolidate import CATEGORICAL, FEATURES, OUT_TABLE, TARGET
 from loss_curve import LossCurve
 
 VAL_SHARE = 0.15      # used to choose the number of trees

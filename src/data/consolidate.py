@@ -11,7 +11,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from config import DB_PATH
+from data.config import DB_PATH
 
 
 

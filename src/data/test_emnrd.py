@@ -1,5 +1,5 @@
 import pandas as pd
-import emnrd_data as e
+from data import emnrd_data as e
 
 # 1. Login works
 token, refresh = e.login()
