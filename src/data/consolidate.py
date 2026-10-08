@@ -12,17 +12,14 @@ import numpy as np
 import pandas as pd
 
 from data.config import DB_PATH
-from FeatureEngineering.build_features import  classify_fluid
-
+from data.config import DB_PATH, LINQ_API_COL, LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TVD_COL
+from FeatureEngineering.build_features import (
+    CATEGORICAL, FEATURES, TARGET, build_features, classify_fluid,
+)
 
 FF_TABLE = "frac_nm"
 LINQ_TABLE = "emnrd_linq"
 OUT_TABLE = "model_base"
-
-LINQ_API_COL = "WellApi"
-LINQ_TVD_COL = "DpthTvdNum"
-LINQ_MD_COL = "DpthMvdNum"
-LINQ_SPUD_COL = "SpudDate"
 
 COUNTY_CODES = {"015": "EDDY", "025": "LEA"}   # API county code -> FracFocus county name
 MIN_JOB_DATE = "2011-01-01"                    # FracFocus began collecting disclosures in 2011
@@ -35,18 +32,6 @@ FF_JOB_COLS = [
     "WellName", "Latitude", "Longitude", "TVD", "TotalBaseWaterVolume",
     "FederalWell", "IndianWell",
 ]
-
-# What the training script should use.
-TARGET = "log_water"
-FEATURES = [
-    "tvd_ft", "md_minus_tvd", "is_horizontal", "Latitude", "Longitude",
-    "OperatorName", "CountyName", "job_year", "days_spud_to_frac",
-    "job_number", "days_since_prev_job", "is_refrac",
-    "FederalWell", "IndianWell", "target_formation", "target_top_depth",
-    "fluid_system", "is_fr", "is_gel", "is_xlink",
-]
-CATEGORICAL = ["OperatorName", "CountyName", "target_formation", "fluid_system"]
-
 
 def to_nm_api(api):
     """'30015123450000' or '30-015-12345' -> '30-015-12345'. None if unusable."""
@@ -135,15 +120,17 @@ def load_linq(conn):
 
 def load_formation(conn):
     query = """
-    SELECT wellApi, formationName as target_formation,
-           MAX(CAST(top AS REAL)) as target_top_depth
-    FROM "emnrd_formation-tops"
-    WHERE producing == 'True'
-    GROUP BY wellApi
-    """
+            SELECT wellApi, formationName AS target_formation,
+                   MAX(CAST(top AS REAL)) AS target_top_depth
+            FROM "emnrd_formation-tops"
+            WHERE producing = 'True'
+              AND CAST(top AS REAL) BETWEEN 1 AND 30000
+            GROUP BY wellApi \
+            """
     df = pd.read_sql(query, conn)
-    df["wellApi"] = df["wellApi"].apply(to_nm_api)
-    return df.dropna(subset=["wellApi"]).drop_duplicates("wellApi")
+    df["api"] = df["wellApi"].apply(to_nm_api)
+    df = df.dropna(subset=["api"]).drop_duplicates("api")
+    return df.drop(columns="wellApi")
 
 def load_chemicals(conn):
     query = f"""
@@ -224,10 +211,10 @@ def main():
         fluid = classify_fluid(load_chemicals(conn))
 
         df = ff.merge(linq, on="api", how="left", validate="m:1", indicator=True)
+        df = df.merge(formation, on="api", how="left", validate="m:1")
         df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
-        for c in ["is_fr", "is_gel", "is_xlink"]:
-            df[c] = df[c].fillna(False).astype(int)
-        df = add_features(df, formation)
+        df = build_features(df)
+
         print("formation coverage:", df["target_formation"].notna().mean())
         report(df, n_jobs=len(ff))
 
