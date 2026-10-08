@@ -26,6 +26,37 @@ NM_COUNTIES = {
 # The counties the model covers.
 TARGET_COUNTIES = {"015": "EDDY", "025": "LEA"}
 
+FF_TABLE = "frac_nm"
+LINQ_TABLE = "emnrd_linq"
+OUT_TABLE = "model_base"
+
+LINQ_API_COL = "WellApi"
+LINQ_TVD_COL = "DpthTvdNum"
+LINQ_MD_COL = "DpthMvdNum"
+LINQ_SPUD_COL = "SpudDate"
+
+COUNTY_CODES = {"015": "EDDY", "025": "LEA"}   # API county code -> FracFocus county name
+MIN_JOB_DATE = "2011-01-01"                    # FracFocus began collecting disclosures in 2011
+
+# FracFocus columns that describe the job (they repeat on every ingredient row).
+# JobEndDate and TotalBaseNonWaterVolume are left out on purpose: both are only
+# known after the job, so they would leak the target.
+FF_JOB_COLS = [
+    "DisclosureId", "JobStartDate", "APINumber", "CountyName", "OperatorName",
+    "WellName", "Latitude", "Longitude", "TVD", "TotalBaseWaterVolume",
+    "FederalWell", "IndianWell",
+]
+
+# What the training script should use.
+TARGET = "log_water"
+FEATURES = [
+    "tvd_ft", "md_minus_tvd", "is_horizontal", "Latitude", "Longitude",
+    "OperatorName", "CountyName", "job_year", "days_spud_to_frac",
+    "job_number", "days_since_prev_job", "is_refrac",
+    "FederalWell", "IndianWell", "target_formation", "target_top_depth",
+    "fluid_system", "is_fr", "is_gel", "is_xlink",
+]
+CATEGORICAL = ["OperatorName", "CountyName", "target_formation", "fluid_system"]
 
 # ---------- Settings ----------
 @dataclass(frozen=True)

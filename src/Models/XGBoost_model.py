@@ -3,7 +3,6 @@
 Lives in src/Models. Run consolidate.py first so model_base exists.
 """
 import sqlite3
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -11,8 +10,6 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, r2_score
 from xgboost import XGBRegressor
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))   # src/data
 
 from data.config import DB_PATH
 from data.consolidate import CATEGORICAL, FEATURES, OUT_TABLE, TARGET

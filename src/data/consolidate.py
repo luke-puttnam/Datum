@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from data.config import DB_PATH
-
+from FeatureEngineering.build_features import  classify_fluid
 
 
 FF_TABLE = "frac_nm"
@@ -42,9 +42,10 @@ FEATURES = [
     "tvd_ft", "md_minus_tvd", "is_horizontal", "Latitude", "Longitude",
     "OperatorName", "CountyName", "job_year", "days_spud_to_frac",
     "job_number", "days_since_prev_job", "is_refrac",
-    "FederalWell", "IndianWell",
+    "FederalWell", "IndianWell", "target_formation", "target_top_depth",
+    "fluid_system", "is_fr", "is_gel", "is_xlink",
 ]
-CATEGORICAL = ["OperatorName", "CountyName"]
+CATEGORICAL = ["OperatorName", "CountyName", "target_formation", "fluid_system"]
 
 
 def to_nm_api(api):
@@ -132,8 +133,28 @@ def load_linq(conn):
     linq = linq.drop(columns=[LINQ_API_COL]).drop_duplicates("api")
     return linq.reset_index(drop=True)
 
+def load_formation(conn):
+    query = """
+    SELECT wellApi, formationName as target_formation,
+           MAX(CAST(top AS REAL)) as target_top_depth
+    FROM "emnrd_formation-tops"
+    WHERE producing == 'True'
+    GROUP BY wellApi
+    """
+    df = pd.read_sql(query, conn)
+    df["wellApi"] = df["wellApi"].apply(to_nm_api)
+    return df.dropna(subset=["wellApi"]).drop_duplicates("wellApi")
 
-def add_features(df):
+def load_chemicals(conn):
+    query = f"""
+    SELECT DisclosureId, IngredientName, IngredientCommonName, CASNumber, Purpose
+    FROM {FF_TABLE}
+    WHERE DisclosureId IS NOT NULL
+    """
+    return pd.read_sql(query, conn)
+
+
+def add_features(df, formation):
     """Derived columns. Everything here is known before the frac job starts."""
     df = df.copy()
 
@@ -171,9 +192,14 @@ def add_features(df):
             | (df["days_since_prev_job"].isna() & (df["days_spud_to_frac"] > 3 * 365))
     ).astype(int)
 
-    # Tidy the categoricals so 'Eog Resources ' and 'EOG RESOURCES' are one operator.
-    for col in CATEGORICAL:
-        df[col] = df[col].str.upper().str.strip()
+    #formation
+    df = df.merge(
+        formation,
+        left_on="api",
+        right_on="wellApi",
+        how="left",
+        validate="m:1"
+    ).drop(columns="wellApi")
 
     return df
 
@@ -194,9 +220,15 @@ def main():
     with sqlite3.connect(DB_PATH) as conn:
         ff = load_fracfocus(conn)
         linq = load_linq(conn)
+        formation = load_formation(conn)
+        fluid = classify_fluid(load_chemicals(conn))
 
         df = ff.merge(linq, on="api", how="left", validate="m:1", indicator=True)
-        df = add_features(df)
+        df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
+        for c in ["is_fr", "is_gel", "is_xlink"]:
+            df[c] = df[c].fillna(False).astype(int)
+        df = add_features(df, formation)
+        print("formation coverage:", df["target_formation"].notna().mean())
         report(df, n_jobs=len(ff))
 
         keep = ["DisclosureId", "api", "WellName", "JobStartDate",
