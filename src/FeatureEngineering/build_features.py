@@ -61,6 +61,9 @@ def add_refrac(df):
     ).astype(int)
     return df
 
+def lateral_length_fall():
+
+
 def add_formation(df):
     """Tidy formation names so spelling variants count as one formation."""
     df = df.copy()

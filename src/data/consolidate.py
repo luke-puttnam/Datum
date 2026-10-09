@@ -217,6 +217,19 @@ def main():
         df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
         df = build_features(df)
 
+        test = df.copy()
+        test["Year"] = pd.to_datetime(test["JobStartDate"], errors="coerce").dt.year
+        print(test.groupby("Year")[["TVD"]].agg(lambda s: s.isna().mean()))
+        print((test["TVD"] == 0).groupby(test["Year"]).mean())
+
+        col = "lateral_length_approx"
+        test = test.rename(columns={"md_minus_tvd": "lateral_length_approx"})
+
+        print("--------------------")
+        print("Lateral Length: ")
+        print(test[col].isna().groupby(test["Year"]).mean())
+        print((test[col] == 0).groupby(test["Year"]).mean())
+
         print("formation coverage:", df["target_formation"].notna().mean())
         report(df, n_jobs=len(ff))
 
