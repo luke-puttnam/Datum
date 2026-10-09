@@ -16,6 +16,7 @@ from data.config import DB_PATH, LINQ_API_COL, LINQ_MD_COL, LINQ_SPUD_COL, LINQ_
 from FeatureEngineering.build_features import (
     CATEGORICAL, FEATURES, TARGET, build_features, classify_fluid,
 )
+from data.completions import load_completions
 
 FF_TABLE = "frac_nm"
 LINQ_TABLE = "emnrd_linq"
@@ -212,6 +213,7 @@ def main():
 
         df = ff.merge(linq, on="api", how="left", validate="m:1", indicator=True)
         df = df.merge(formation, on="api", how="left", validate="m:1")
+        df = df.merge(load_completions(conn), on="api", how="left", validate="m:1")
         df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
         df = build_features(df)
 

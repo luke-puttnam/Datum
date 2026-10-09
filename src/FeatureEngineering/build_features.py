@@ -10,13 +10,12 @@ FR_CAS    = {"9003-05-8"}                                           # polyacryla
 
 TARGET = "log_water"
 FEATURES = [
-    "tvd_ft", "md_minus_tvd", "is_horizontal", "Latitude", "Longitude",
-    "OperatorName", "CountyName", "job_year", "days_spud_to_frac",
-    "job_number", "days_since_prev_job", "is_refrac",
-    "FederalWell", "IndianWell", "target_formation", "target_top_depth",
-    "fluid_system", "is_fr", "is_gel", "is_xlink",
+    "tvd_ft", "md_minus_tvd", "is_horizontal", "perf_lateral_ft", "spacing_acres",
+    "Latitude", "Longitude", "OperatorName", "CountyName", "pool_formation",
+    "job_year", "days_spud_to_frac", "job_number", "days_since_prev_job", "is_refrac",
+    "FederalWell", "fluid_system", "is_fr", "is_gel", "is_xlink",
 ]
-CATEGORICAL = ["OperatorName", "CountyName", "target_formation", "fluid_system"]
+CATEGORICAL = ["OperatorName", "CountyName", "pool_formation", "fluid_system"]
 
 
 def add_target(df):
