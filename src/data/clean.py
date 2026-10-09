@@ -1,13 +1,13 @@
 import pandas as pd
-from ingest import  RAW
 import sqlite3
+
+from data.config import DB_PATH, FRACFOCUS_DIR
 
 nm_df = pd.DataFrame()
 nm_disc_df = pd.DataFrame()
-FRAC = RAW / "FracFocusCSV"
 
 def connect_server():
-    connection = sqlite3.connect("datum.db")
+    connection = sqlite3.connect(DB_PATH)
     return connection
 
 def gather(file_name, disc=False):
@@ -17,9 +17,6 @@ def gather(file_name, disc=False):
     if disc:
         mask &= df["TotalBaseWaterVolume"].notna()
     return df[mask]
-
-def check_refrack():
-    pass
 
 def duplicate_check(df):
     df = df.drop_duplicates(subset=['DisclosureId'])
@@ -35,7 +32,7 @@ def check_database(connection, table):
 
 if __name__ == "__main__":
     conn = connect_server()
-    for f in FRAC.iterdir():
+    for f in FRACFOCUS_DIR.iterdir():
         if f.suffix.lower() != ".csv":
             continue
         if "FracFocusRegistry" in f.name:

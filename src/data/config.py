@@ -9,6 +9,8 @@ PROJECT_ROOT = DATA_DIR.parents[1]                  # Datum/
 DB_PATH = DATA_DIR / "datum.db"
 LINQ_DIR = DATA_DIR / "linq_counties.csv"           # folder of per-county LINQ pulls
 ENV_PATH = PROJECT_ROOT / ".env"
+RAW_DIR = PROJECT_ROOT / "Data" / "Raw"
+FRACFOCUS_DIR = RAW_DIR / "FracFocusCSV"
 
 # ---------- Constants ----------
 NM_COUNTIES = {
@@ -23,9 +25,6 @@ NM_COUNTIES = {
     "061": "Valencia",
 }
 
-# The counties the model covers.
-TARGET_COUNTIES = {"015": "EDDY", "025": "LEA"}
-
 FF_TABLE = "frac_nm"
 LINQ_TABLE = "emnrd_linq"
 OUT_TABLE = "model_base"
@@ -35,6 +34,7 @@ LINQ_TVD_COL = "DpthTvdNum"
 LINQ_MD_COL = "DpthMvdNum"
 LINQ_SPUD_COL = "SpudDate"
 
+# The counties the model covers.
 COUNTY_CODES = {"015": "EDDY", "025": "LEA"}   # API county code -> FracFocus county name
 MIN_JOB_DATE = "2011-01-01"                    # FracFocus began collecting disclosures in 2011
 
@@ -76,11 +76,3 @@ class APIConfig:
             password=os.environ.get("EMNRD_PASS", ""),
         )
 
-
-@dataclass(frozen=True)
-class ModelConfig:
-    target: str = "TotalBaseWaterVolume"
-    log_target: bool = True
-    val_share: float = 0.15
-    test_share: float = 0.15
-    random_seed: int = 42

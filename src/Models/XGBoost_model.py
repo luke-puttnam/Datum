@@ -1,6 +1,7 @@
 """XGBoost model for frac water volume, trained on model_base.
 
-Lives in src/Models. Run consolidate.py first so model_base exists.
+Lives in src/Models. Run data.consolidate first so model_base exists.
+Run from src/:  python -m Models.XGBoost_model
 """
 import sqlite3
 from pathlib import Path
@@ -12,8 +13,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.inspection import permutation_importance
 from xgboost import XGBRegressor
 
-from data.config import DB_PATH
-from data.consolidate import CATEGORICAL, FEATURES, OUT_TABLE, TARGET
+from data.config import CATEGORICAL, DB_PATH, FEATURES, OUT_TABLE, TARGET
 from Models.loss_curve import LossCurve
 
 VAL_SHARE = 0.15      # used to choose the number of trees

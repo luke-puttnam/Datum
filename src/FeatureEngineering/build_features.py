@@ -1,22 +1,11 @@
 import numpy as np
 import pandas as pd
-import sqlite3
 
-from data.config import LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TVD_COL
+from data.config import LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TVD_COL, TARGET
 
 GEL_CAS   = {"9000-30-0", "39421-75-5", "68130-15-4"}               # guar, HPG, CMHPG
 XLINK_CAS = {"10043-35-3", "1303-96-4", "1330-43-4", "1319-33-1"}   # boric acid, borates, ulexite
 FR_CAS    = {"9003-05-8"}                                           # polyacrylamide
-
-TARGET = "log_water"
-FEATURES = [
-    "tvd_ft", "md_minus_tvd", "is_horizontal", "Latitude", "Longitude",
-    "OperatorName", "CountyName", "job_year", "days_spud_to_frac",
-    "job_number", "days_since_prev_job", "is_refrac",
-    "FederalWell", "IndianWell", "target_formation", "target_top_depth",
-    "fluid_system", "is_fr", "is_gel", "is_xlink",
-]
-CATEGORICAL = ["OperatorName", "CountyName", "target_formation", "fluid_system"]
 
 
 def add_target(df):

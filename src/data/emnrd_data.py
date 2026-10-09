@@ -9,14 +9,13 @@ import brotli
 import urllib3.exceptions
 
 from data.clean import connect_server
+from data.config import DATA_DIR, ENV_PATH, LINQ_DIR
 from pathlib import Path
 from dotenv import load_dotenv
 from urllib3.util.retry import Retry
 
 BASE = "https://api.emnrd.nm.gov/wda"
 LOGIN_URL = f"{BASE}/v2/Authorization/Token/LoginCredentials"
-load_dotenv()
-conn = connect_server()
 data_find = ["formation-tops", "production-injection", "perforations"]
 
 retry = Retry(total=5, backoff_factor=1,
@@ -41,7 +40,7 @@ def session_auth(acc_token, ref_token, use_access = True):
     })
     return session
 
-def get_api():
+def get_api(conn):
     query = """
             SELECT DISTINCT(APINumber) FROM disclosures; \
             """
@@ -99,18 +98,8 @@ def fetch_all_water_uses(session):
         time.sleep(0.2)
 
     nm_df = pd.concat(frames, ignore_index=True)
-    nm_df.to_csv("nm_water_uses.csv", index=False)
+    nm_df.to_csv(DATA_DIR / "nm_water_uses.csv", index=False)
     return nm_df
-
-def to_nm_api(api):
-    if pd.isna(api):
-        return None
-    s = str(api).split(".")[0]
-    digits = "".join(c for c in s if c.isdigit())
-    if len(digits) in (12, 14):
-        digits = digits[:10]
-    digits = digits.zfill(10)
-    return f"{digits[:2]}-{digits[2:5]}-{digits[5:]}"
 
 def parameters_link(category):
     match category:
@@ -144,7 +133,7 @@ def get_page(session, link, params, page, cache_dir):
     time.sleep(0.8)
     return data
 
-def linq_by_county(session, out_dir = "linq_counties.csv"):
+def linq_by_county(session, conn, out_dir = LINQ_DIR):
     base_params, link = parameters_link("linq")
     PAGE_SIZE = 250
     if isinstance(link, list):
@@ -218,11 +207,11 @@ def linq_by_county(session, out_dir = "linq_counties.csv"):
         )
     full.to_sql("emnrd_linq", conn, if_exists="replace", index=False)
 
-    pd.DataFrame(failed_pages, columns=["county", "page"]).to_csv("linq_failed.csv", index=False)
+    pd.DataFrame(failed_pages, columns=["county", "page"]).to_csv(DATA_DIR / "linq_failed.csv", index=False)
     print(f"{len(full)} wells saved, {len(failed_pages)} pages failed")
     return full, failed_pages
 
-def emnrd_per_well(session, category, table = None, batch_size=300):
+def emnrd_per_well(session, conn, category, table = None, batch_size=300):
     table = table or f'emnrd_{category}'
     parameters, url = parameters_link(category)
     try:
@@ -233,7 +222,7 @@ def emnrd_per_well(session, category, table = None, batch_size=300):
     frames = []
     failed = []
     fails_ina_row = 0
-    for well in get_api().itertuples():
+    for well in get_api(conn).itertuples():
         api = str(well.APINumber)[:-4]
         if api in done:
             continue
@@ -273,10 +262,9 @@ def emnrd_per_well(session, category, table = None, batch_size=300):
     if frames:
         append_frames(frames, table, conn)
     if failed:
-        pd.DataFrame(failed, columns=["api", "error"]).to_csv(
-            f'failed_{category}.csv', index=False
-        )
-        print(f'{len(failed)} wells failed; check failed_{category}.csv')
+        failed_path = DATA_DIR / f'failed_{category}.csv'
+        pd.DataFrame(failed, columns=["api", "error"]).to_csv(failed_path, index=False)
+        print(f'{len(failed)} wells failed; check {failed_path}')
 
 def try_filter(session, link, base_params, expr):
     p = dict(base_params)
@@ -295,14 +283,16 @@ def append_frames(frames, table, conn):
     df.to_sql(table, conn, if_exists="append", index=False)
 
 def main():
+    load_dotenv(ENV_PATH)
+    conn = connect_server()
     access_token, refresh_token = login()
     session_authentication = session_auth(access_token, refresh_token)
-    full, failed_pages = linq_by_county(session_authentication)
+    full, failed_pages = linq_by_county(session_authentication, conn)
     ALREADY_DONE = ["formation-tops", "production-injection"]
     for cat in data_find:
         if cat in set(ALREADY_DONE):
             continue
-        emnrd_per_well(session_authentication, cat)
+        emnrd_per_well(session_authentication, conn, cat)
     nm_df = fetch_all_water_uses(session_authentication)
     conn.close()
 

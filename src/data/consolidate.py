@@ -4,34 +4,19 @@ Sources (both in datum.db):
     frac_nm     - FracFocus disclosures, one row per ingredient
     emnrd_linq  - EMNRD well records, one row per well
 
-Run:  python consolidate.py
+Run from src/:  python -m data.consolidate
 """
 import sqlite3
 
 import numpy as np
 import pandas as pd
 
-from data.config import DB_PATH
-from data.config import DB_PATH, LINQ_API_COL, LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TVD_COL
-from FeatureEngineering.build_features import (
-    CATEGORICAL, FEATURES, TARGET, build_features, classify_fluid,
+from data.config import (
+    COUNTY_CODES, DB_PATH, FEATURES, FF_JOB_COLS, FF_TABLE, LINQ_API_COL, LINQ_MD_COL,
+    LINQ_SPUD_COL, LINQ_TABLE, LINQ_TVD_COL, MIN_JOB_DATE, OUT_TABLE, TARGET,
 )
+from FeatureEngineering.build_features import build_features, classify_fluid
 
-FF_TABLE = "frac_nm"
-LINQ_TABLE = "emnrd_linq"
-OUT_TABLE = "model_base"
-
-COUNTY_CODES = {"015": "EDDY", "025": "LEA"}   # API county code -> FracFocus county name
-MIN_JOB_DATE = "2011-01-01"                    # FracFocus began collecting disclosures in 2011
-
-# FracFocus columns that describe the job (they repeat on every ingredient row).
-# JobEndDate and TotalBaseNonWaterVolume are left out on purpose: both are only
-# known after the job, so they would leak the target.
-FF_JOB_COLS = [
-    "DisclosureId", "JobStartDate", "APINumber", "CountyName", "OperatorName",
-    "WellName", "Latitude", "Longitude", "TVD", "TotalBaseWaterVolume",
-    "FederalWell", "IndianWell",
-]
 
 def to_nm_api(api):
     """'30015123450000' or '30-015-12345' -> '30-015-12345'. None if unusable."""
@@ -139,56 +124,6 @@ def load_chemicals(conn):
     WHERE DisclosureId IS NOT NULL
     """
     return pd.read_sql(query, conn)
-
-
-def add_features(df, formation):
-    """Derived columns. Everything here is known before the frac job starts."""
-    df = df.copy()
-
-    # Target, log-scaled because a few jobs use enormous volumes.
-    df[TARGET] = np.log1p(df["TotalBaseWaterVolume"])
-
-    # Depth: FracFocus TVD first, EMNRD TVD where FracFocus has none.
-    ff_tvd = df["TVD"].where(df["TVD"].between(1, 20000))
-    emnrd_tvd = df[LINQ_TVD_COL] if LINQ_TVD_COL in df else np.nan
-    df["tvd_ft"] = ff_tvd.fillna(emnrd_tvd)
-
-    # Rough lateral length. Negative values are data errors.
-    if LINQ_MD_COL in df:
-        diff = df[LINQ_MD_COL] - df["tvd_ft"]
-        df["md_minus_tvd"] = diff.where(diff >= 0)
-    else:
-        df["md_minus_tvd"] = np.nan
-    df["is_horizontal"] = (df["md_minus_tvd"] > 2000).astype(float)
-    df.loc[df["md_minus_tvd"].isna(), "is_horizontal"] = np.nan
-
-    # Time.
-    df["job_year"] = df["JobStartDate"].dt.year
-    if LINQ_SPUD_COL in df:
-        days = (df["JobStartDate"] - df[LINQ_SPUD_COL]).dt.days
-        df["days_spud_to_frac"] = days.where(days >= 0)
-    else:
-        df["days_spud_to_frac"] = np.nan
-
-    # Refracs: a later job on the same well, or a first recorded job long after spud.
-    df = df.sort_values(["api", "JobStartDate"])
-    df["job_number"] = df.groupby("api").cumcount() + 1
-    df["days_since_prev_job"] = df.groupby("api")["JobStartDate"].diff().dt.days
-    df["is_refrac"] = (
-            (df["days_since_prev_job"] > 365)
-            | (df["days_since_prev_job"].isna() & (df["days_spud_to_frac"] > 3 * 365))
-    ).astype(int)
-
-    #formation
-    df = df.merge(
-        formation,
-        left_on="api",
-        right_on="wellApi",
-        how="left",
-        validate="m:1"
-    ).drop(columns="wellApi")
-
-    return df
 
 
 def report(df, n_jobs):

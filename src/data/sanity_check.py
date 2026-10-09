@@ -1,5 +1,5 @@
 import pandas as pd
-from clean import connect_server
+from data.clean import connect_server
 
 def general(connection):
     query = """
