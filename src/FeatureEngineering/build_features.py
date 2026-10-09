@@ -1,11 +1,27 @@
 import numpy as np
 import pandas as pd
 
-from data.config import LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TVD_COL, TARGET
+from data.config import (
+    LINQ_FORMATION_COL, LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TGT_COL, LINQ_TVD_COL, TARGET,
+)
 
 GEL_CAS   = {"9000-30-0", "39421-75-5", "68130-15-4"}               # guar, HPG, CMHPG
 XLINK_CAS = {"10043-35-3", "1303-96-4", "1330-43-4", "1319-33-1"}   # boric acid, borates, ulexite
 FR_CAS    = {"9003-05-8"}                                           # polyacrylamide
+
+# Permit formation text -> target formation group. First match wins, so benches and
+# members come before the group they belong to. Unmatched text (permit numbers,
+# "REQUIRES NSP", "DEFINING WELL ...") stays missing.
+FORMATION_GROUPS = [
+    (r"AVALON|BONE ?SPRINGS?|\bBS\b", "BONE SPRING"),
+    (r"WOLFCAMP|WOLFBONE|\bWC\b", "WOLFCAMP"),
+    (r"YESO|GLORIETA|PADDOCK|BLINEBRY|DRINKARD|TUBB|BL-TU-DR", "YESO"),
+    (r"DELAWARE|BRUSHY|CHERRY CANYON|BELL CANYON", "DELAWARE"),
+    (r"SAN ANDRES|GRAYBURG|QUEEN|SEVEN RIVERS|YATES", "SAN ANDRES"),
+    (r"PENN|STRAWN|ATOKA|MORROW|CISCO|CANYON", "PENN"),
+    (r"ABO", "ABO"),
+    (r"DEVONIAN|SILURIAN|MISSISSIPPIAN|ELLENBURGER|FUSSELMAN", "DEEP"),
+]
 
 
 def add_target(df):
@@ -14,14 +30,21 @@ def add_target(df):
     return df
 
 def add_geometry(df):
-    """lateral_length_ft, lateral_source, is_horizontal"""
+    """tvd_ft, md_minus_tvd, is_horizontal.
+
+    EMNRD leaves completed MD at 0 for most wells completed since 2021, so the permitted
+    target depth stands in where MD is missing. It matches MD within 5% for ~78% of wells.
+    """
     df = df.copy()
     ff_tvd = df["TVD"].where(df["TVD"].between(1, 20000))
     emnrd_tvd = df[LINQ_TVD_COL] if LINQ_TVD_COL in df else np.nan
     df["tvd_ft"] = ff_tvd.fillna(emnrd_tvd)
 
     if LINQ_MD_COL in df:
-        diff = df[LINQ_MD_COL] - df["tvd_ft"]
+        md = df[LINQ_MD_COL]
+        if LINQ_TGT_COL in df:
+            md = md.fillna(df[LINQ_TGT_COL])
+        diff = md - df["tvd_ft"]
         df["md_minus_tvd"] = diff.where(diff >= 0)
     else:
         df["md_minus_tvd"] = np.nan
@@ -52,10 +75,14 @@ def add_refrac(df):
     return df
 
 def add_formation(df):
-    """Tidy formation names so spelling variants count as one formation."""
+    """target_formation: the permit's proposed formation, grouped (see FORMATION_GROUPS)."""
     df = df.copy()
-    df["target_formation"] = (df["target_formation"].str.upper()
-                              .str.replace(r"\s+", " ", regex=True).str.strip())
+    text = df[LINQ_FORMATION_COL] if LINQ_FORMATION_COL in df else pd.Series(index=df.index, dtype=str)
+    text = text.str.upper().str.replace(r"\s+", " ", regex=True).str.strip()
+    df["target_formation"] = None
+    for pattern, group in FORMATION_GROUPS:
+        hit = df["target_formation"].isna() & text.str.contains(pattern, na=False)
+        df.loc[hit, "target_formation"] = group
     return df
 
 def add_fluid(df):

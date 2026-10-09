@@ -34,6 +34,7 @@ LINQ_TVD_COL = "DpthTvdNum"
 LINQ_MD_COL = "DpthMvdNum"
 LINQ_SPUD_COL = "SpudDate"
 LINQ_TGT_COL = "DpthTgtNum"                    # permitted target depth, known before the frac
+LINQ_FORMATION_COL = "PropFmDescription"       # proposed formation, free text from the permit
 
 # The counties the model covers.
 COUNTY_CODES = {"015": "EDDY", "025": "LEA"}   # API county code -> FracFocus county name

@@ -12,8 +12,9 @@ import numpy as np
 import pandas as pd
 
 from data.config import (
-    COUNTY_CODES, DB_PATH, FEATURES, FF_JOB_COLS, FF_TABLE, LINQ_API_COL, LINQ_MD_COL,
-    LINQ_SPUD_COL, LINQ_TABLE, LINQ_TVD_COL, MIN_JOB_DATE, OUT_TABLE, TARGET,
+    COUNTY_CODES, DB_PATH, FEATURES, FF_JOB_COLS, FF_TABLE, LINQ_API_COL, LINQ_FORMATION_COL,
+    LINQ_MD_COL, LINQ_SPUD_COL, LINQ_TABLE, LINQ_TGT_COL, LINQ_TVD_COL, MIN_JOB_DATE, OUT_TABLE,
+    TARGET,
 )
 from FeatureEngineering.build_features import build_features, classify_fluid
 
@@ -77,7 +78,8 @@ def load_linq(conn):
     available = pd.read_sql(f"SELECT * FROM {LINQ_TABLE} LIMIT 0", conn).columns
     actual = {c.lower(): c for c in available}            # 'wellapi' -> the table's own spelling
 
-    wanted = [LINQ_API_COL, LINQ_TVD_COL, LINQ_MD_COL, LINQ_SPUD_COL]
+    wanted = [LINQ_API_COL, LINQ_TVD_COL, LINQ_MD_COL, LINQ_TGT_COL, LINQ_SPUD_COL,
+              LINQ_FORMATION_COL]
     found = {actual[w.lower()]: w for w in wanted if w.lower() in actual}
     missing = [w for w in wanted if w.lower() not in actual]
     if missing:
@@ -93,7 +95,7 @@ def load_linq(conn):
     linq = linq[linq["api"].str[3:6].isin(COUNTY_CODES)]
 
     # 0 and 99999 are EMNRD's "not reported" markers.
-    depth_cols = [c for c in (LINQ_TVD_COL, LINQ_MD_COL) if c in linq]
+    depth_cols = [c for c in (LINQ_TVD_COL, LINQ_MD_COL, LINQ_TGT_COL) if c in linq]
     linq[depth_cols] = linq[depth_cols].apply(pd.to_numeric, errors="coerce")
     linq[depth_cols] = linq[depth_cols].replace([0, 99999], np.nan)
 
@@ -104,9 +106,9 @@ def load_linq(conn):
     return linq.reset_index(drop=True)
 
 def load_formation(conn):
+    """Deepest producing formation top per well. target_formation comes from LINQ instead."""
     query = """
-            SELECT wellApi, formationName AS target_formation,
-                   MAX(CAST(top AS REAL)) AS target_top_depth
+            SELECT wellApi, MAX(CAST(top AS REAL)) AS target_top_depth
             FROM "emnrd_formation-tops"
             WHERE producing = 'True'
               AND CAST(top AS REAL) BETWEEN 1 AND 30000
@@ -150,7 +152,6 @@ def main():
         df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
         df = build_features(df)
 
-        print("formation coverage:", df["target_formation"].notna().mean())
         report(df, n_jobs=len(ff))
 
         keep = ["DisclosureId", "api", "WellName", "JobStartDate",
