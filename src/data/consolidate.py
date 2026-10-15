@@ -142,6 +142,22 @@ def load_chemicals(conn):
     return pd.read_sql(query, conn)
 
 
+def merge_well_imaging(conn):
+    query = """
+    SELECT DISTINCT
+        m.api,
+        p.wellImagingFiles,
+    FROM model_base as m
+    LEFT JOIN emnrd_perforations as p
+        ON SUBSTR(REPLACE(p.wellApi, '-', ''), 1, 10)
+        = SUBSTR(REPLACE(m.wellApi, '-', ''), 1, 10)
+    WHERE m.md_minus_tvd IS NULL
+      AND (m.api LIKE '30025%' OR m.api LIKE '30015%'
+        OR m.api LIKE '30-025%' OR m.api LIKE '30-015%');
+    """
+    return pd.read_sql(query, conn)
+
+
 def add_features(df, formation):
     """Derived columns. Everything here is known before the frac job starts."""
     df = df.copy()
@@ -217,31 +233,38 @@ def main():
         df = df.merge(fluid, on="DisclosureId", how="left", validate="m:1")
         df = build_features(df)
 
+        # --- diagnostics ---
         test = df.copy()
         test["Year"] = pd.to_datetime(test["JobStartDate"], errors="coerce").dt.year
         print(test.groupby("Year")[["TVD"]].agg(lambda s: s.isna().mean()))
         print((test["TVD"] == 0).groupby(test["Year"]).mean())
 
         col = "lateral_length_approx"
-        test = test.rename(columns={"md_minus_tvd": "lateral_length_approx"})
-
-        print("--------------------")
-        print("Lateral Length: ")
+        test = test.rename(columns={"md_minus_tvd": col})
+        print("--------------------\nLateral Length: ")
         print(test[col].isna().groupby(test["Year"]).mean())
         print((test[col] == 0).groupby(test["Year"]).mean())
 
         print("formation coverage:", df["target_formation"].notna().mean())
         report(df, n_jobs=len(ff))
 
+        # --- save model table ---
         keep = ["DisclosureId", "api", "WellName", "JobStartDate",
                 "TotalBaseWaterVolume", TARGET] + FEATURES
         df[keep].to_sql(OUT_TABLE, conn, if_exists="replace", index=False)
         print(f"\nSaved {OUT_TABLE} to {DB_PATH}")
 
+        # --- imaging links (needs model_base saved first) ---
+        imaging = merge_well_imaging(conn)
+        imaging.to_sql("imaging_links", conn, if_exists="replace", index=False)
+        print(f"imaging_links: {imaging['api'].nunique()} wells, "
+              f"{imaging['wellImagingfiles'].isna().mean():.0%} without a link")
+
+        conn.commit()
+
         checked_df = pd.read_sql(show_consolidated_table(), conn, parse_dates=["JobStartDate"])
         checked_df.to_csv(DB_PATH.parent / "model_base.csv", index=False)
         print(checked_df.head().T)
-
 
 if __name__ == "__main__":
     main()
