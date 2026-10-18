@@ -1,5 +1,5 @@
 import pandas as pd
-from ingest import  RAW
+from data.ingest import RAW
 import sqlite3
 
 nm_df = pd.DataFrame()

@@ -9,13 +9,14 @@ import pdfplumber
 import fitz
 import time
 import numpy as np
+from contextlib import contextmanager
 
 from data.config import DB_PATH
 from data.emnrd_data import login, session_auth
-from FeatureEngineering.C_102 import parse_c102, plss_xy
+from FeatureEngineering.C_102 import parse_c102, plss_xy, ocr_words
 
 
-READER = easyocr.Reader(["en"], gpu=False)
+READER = easyocr.Reader(["en"], gpu=True)
 
 def create_results_table(conn):
     conn.execute("""
@@ -64,7 +65,7 @@ def simple_extract(fitz_page, plumb_page, dpi=150):
     return words_to_text(read_ocr(page_to_array(fitz_page, dpi))), 'ocr'
 
 def is_apd(text):
-    return bool(re.search(r"APPLICATION\s+FOR\s+PERMIT\s+TO\s+DRILL", text, re.I))
+    return bool(re.search(r"Form\s+3160-3", text[:300], re.I))
 
 def is_c102(text):
     return bool(re.search(r"C-?102|ACREAGE\s+DEDICATION\s+PLAT", text, re.I))
@@ -135,7 +136,7 @@ def load_paper(session, url, retries=3, timeout=30):
         return data
     return None
 
-
+@contextmanager
 def open_pdf(src):
     doc = plumb = None
     try:
@@ -146,7 +147,7 @@ def open_pdf(src):
             doc = fitz.open(src)
             plumb = pdfplumber.open(src)
 
-        if doc.need_pass:
+        if doc.needs_pass:
             raise ValueError("encrypted pdf")
         if doc.page_count == 0:
             raise ValueError("empty pdf")
@@ -162,20 +163,72 @@ def page_to_array(page, dpi=300):
     pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
     return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
 
+def header_text(fitz_page, dpi=100, frac=0.25):
+    """OCR just the top quarter of a scanned page to identify the form."""
+    img = page_to_array(fitz_page, dpi)
+    return words_to_text(ocr_words(img[: int(img.shape[0] * frac)]))
 
-def extract_lateral(doc, plumb):
-    for i, (fp, pp) in enumerate(zip(doc, plumb.pages)):
-        text, method = simple_extract(fp, pp)            # cheap pass
+def fitz_words(fitz_page):
+    """Positioned words from the text layer, in ocr_words format."""
+    return [((x0 + x1) / 2, (y0 + y1) / 2, y1 - y0, w, 1.0)
+            for x0, y0, x1, y1, w, *_ in fitz_page.get_text("words")]
+
+def extract_lateral(doc, plumb=None, max_pages=10):
+    fallback = None
+    order = list(range(min(max_pages, doc.page_count))) + list(range(max_pages, doc.page_count))
+
+    for i in order:
+        fp = doc[i]
+        text = fp.get_text()
+        has_text = len(text.strip()) > 50
+        if not has_text:
+            text = header_text(fp)                       # cheap identification only
+
         if is_apd(text):
-            if method == "ocr":                          # re-read scans at full res
-                text = words_to_text(read_ocr(page_to_array(fp, 300)))
-            res = parse_apd(text)
-            return {**res, "source_form": "APD", "page": i + 1}
-        if is_c102(text):
-            res = parse_c102(read_ocr(page_to_array(fp, 300)))   # needs boxes, so always OCR
-            return {**res, "source_form": "C-102", "page": i + 1}
-    return {"lateral_ft": None, "status": "no form found", "source_form": None, "page": None}
+            full = text if has_text else words_to_text(ocr_words(page_to_array(fp, 300)))
+            res = {**parse_apd(full), "source_form": "APD", "page": i + 1}
+        elif is_c102(text):
+            words = fitz_words(fp) if has_text else ocr_words(page_to_array(fp, 300))
+            res = {**parse_c102(words), "source_form": "C-102", "page": i + 1}
+        else:
+            continue
 
+        if res.get("lateral_ft") is not None:
+            return res
+        fallback = fallback or res
+
+    return fallback or {"lateral_ft": None, "status": "no form found", "source_form": None, "page": None}
+
+    return fallback or {"lateral_ft": None, "status": "no form found", "source_form": None, "page": None}
+
+def test_one(src, session=None):
+    """Run extraction on one PDF (local path or URL) and print each step. No DB writes."""
+    if src.startswith("http"):
+        if session is None:
+            main_key, refresh_key = login()
+            session = session_auth(main_key, refresh_key)
+        data = load_paper(session, src)
+        if data is None:
+            print("download failed")
+            return
+        print(f"downloaded {len(data):,} bytes")
+    else:
+        with open(src, "rb") as f:
+            data = f.read()
+
+    with open_pdf(data) as (doc, plumb):
+        print(f"{doc.page_count} pages")
+        for i, (fp, pp) in enumerate(zip(doc, plumb.pages), 1):
+            text, method = simple_extract(fp, pp)
+            form = "APD" if is_apd(text) else "C-102" if is_c102(text) else "-"
+            print(f"  page {i:>2}: {method:<4} form={form:<5} {text[:80]!r}")
+
+        result = extract_lateral(doc, plumb)
+
+    print("\nRESULT:")
+    for k, v in result.items():
+        print(f"  {k}: {v}")
+    return result
 # ---------- main ----------
 def main():
     main_key, refresh_key = login()
@@ -213,4 +266,8 @@ def main():
         conn.commit()
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        test_one(sys.argv[1])
+    else:
+        main()
